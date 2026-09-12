@@ -1,49 +1,55 @@
-# AquaClass — Explainable Water Quality Classification
+# AquaClass Global 2.0
 
-A production-oriented Streamlit starter application for global water-quality screening.
+A Streamlit application for worldwide water-quality screening and explainable analysis.
 
-## Features
-- Upload a CSV and automatically recognize common aliases for:
-  pH, Turbidity, TDS, Dissolved Oxygen, Nitrate, BOD, COD,
-  Conductivity, Coliform Indicator, Temperature.
-- Classifies every parameter as Good / Moderate / Poor / Very Poor.
-- Produces an overall Water-quality classifier.
-- Parameter score chart and transparent screening logic.
-- World map for uploaded observations using Latitude/Longitude.
-- Bundled historical water-issue map and table.
-- Optional Random Forest training when a labeled target column is present.
-- Export analyzed results to CSV.
-- No hard-coded final result for uploaded data: calculations respond to input rows.
+## Main capabilities
+- Multiple CSV upload
+- Automatic recognition of common parameter aliases
+- Parameter classification:
+  pH, turbidity, TDS, dissolved oxygen, nitrate, BOD, COD,
+  conductivity, coliform indicator and temperature
+- Good / Moderate / Poor / Very Poor classification
+- Overall water-quality classifier
+- Per-record transparent parameter score chart
+- Global observation map from latitude/longitude
+- Country and year filters
+- Time-series and observation-coverage charts
+- Historical water-issue reference map
+- Optional Random Forest model for labeled datasets
+- CSV export
 
-## CSV columns
-Minimum recommended columns:
-Location, Country, Latitude, Longitude, Date, pH, Turbidity, TDS,
-Dissolved Oxygen, Nitrate, BOD, COD, Conductivity,
-Coliform Indicator, Temperature
+## Recommended global data architecture
 
-Common aliases such as `ph`, `do`, `ec`, `ntu`, `temp`, and `no3` are accepted.
+AquaClass should distinguish:
+1. **Observed water-quality measurements** — laboratory/monitoring observations.
+2. **Historical water-related events** — spills, floods, drought/water scarcity, contamination events.
+3. **Country-level indicators** — useful for context but not interchangeable with water-quality measurements.
 
-## Run locally
-pip install -r requirements.txt
-streamlit run app.py
+For large global research datasets, use authoritative sources and retain:
+`source`, `dataset`, `station_id`, `country`, `location`, `latitude`, `longitude`,
+`date`, `parameter`, `value`, `unit`, `method`, `quality_flag`.
 
-## Deploy to Streamlit Community Cloud
-Push all three files to GitHub:
-- app.py
-- requirements.txt
-- historical_water_issues.csv
+UNEP GEMS/Water GEMStat is a particularly relevant source: the official GEMStat information
+reports tens of millions of measurements, thousands of monitoring stations, hundreds of
+parameters, and records extending back to the early 1900s. The public archive should be
+downloaded/processed separately rather than bundled into this GitHub repository because of its
+size.
 
-Then create a Streamlit deployment from the GitHub repository.
+## Deployment
+1. Upload `app.py`, `requirements.txt`, and `historical_water_issues.csv` to GitHub.
+2. Create a Streamlit Community Cloud app from the repository.
+3. Set the main file to `app.py`.
+4. No API key is required for the core analysis.
 
-## Important scientific note
-The default parameter bands are generic screening bands intended for software demonstration.
-They are NOT a universal drinking-water, ecological-water, wastewater-discharge, or public-health standard.
-For a research/production deployment, replace the defaults with the exact standard selected
-for the intended water use and jurisdiction, document units, and preserve the standard/version
-in the dataset metadata.
+## Scientific safeguards
+The default thresholds are generic screening bands, not a universal global standard.
+For publication or regulatory use, implement a standards layer that records:
+- jurisdiction
+- intended water use
+- parameter
+- unit
+- threshold
+- standard name
+- standard version/date
 
-## Scaling to worldwide historical data
-The included historical CSV is deliberately a small starter dataset. For a serious global research
-edition, connect/import authoritative time-series sources and normalize them into a common schema
-with source, date, location, units, methodology, and uncertainty fields. The app's uploader already
-supports replacing the starter dataset with larger curated files.
+Never combine measurements with incompatible units or analytical methods without normalization.

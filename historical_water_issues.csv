@@ -1,15 +1,9 @@
 Year,Event,Country,Latitude,Longitude,Issue Type,Severity
 1986,Sandoz chemical spill,Switzerland,47.5596,7.5886,Industrial pollution,High
-1989,Exxon Valdez oil spill,United States,60.984,-146.958,Oil pollution,High
-1991,Kuwait oil contamination,Kuwait,29.3759,47.9774,Oil pollution,High
-1998,Azoteq / mining-water pollution example,South Africa,-30.5595,22.9375,Mining pollution,Moderate
 2000,Baia Mare cyanide spill,Romania,47.6567,23.585,Mining pollution,High
-2004,Indian Ocean tsunami water contamination,Indonesia,-2.5489,118.0149,Disaster / contamination,High
-2008,Matanza-Riachuelo pollution concern,Argentina,-34.65,-58.45,Urban / industrial pollution,High
+2004,Indian Ocean tsunami,Indonesia,-2.5489,118.0149,Disaster / contamination,High
 2010,Deepwater Horizon,United States,28.7368,-88.365,Oil pollution,High
 2015,Gold King Mine spill,United States,37.5486,-107.855,Mining pollution,High
 2018,Cape Town water crisis,South Africa,-33.9249,18.4241,Water scarcity,High
 2019,Chennai water crisis,India,13.0827,80.2707,Water scarcity,High
-2022,Pakistan floods and water contamination,Pakistan,30.3753,69.3451,Flood / contamination,High
-2023,Hawaii wildfire watershed contamination,United States,20.7984,-156.3319,Disaster / contamination,Moderate
-2024,Global water-stress monitoring example,Global,20.0,0.0,Water stress,Moderate
+2022,Pakistan floods,Pakistan,30.3753,69.3451,Flood / contamination,High

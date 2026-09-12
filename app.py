@@ -1,340 +1,288 @@
 
 import io
-import os
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.inspection import permutation_importance
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-st.set_page_config(page_title="AquaClass | Explainable Water Quality", page_icon="💧", layout="wide")
-
-APP_DIR = Path(__file__).parent
-HISTORY_FILE = APP_DIR / "historical_water_issues.csv"
+st.set_page_config(page_title="AquaClass Global 2.0", page_icon="💧", layout="wide")
 
 PARAMETERS = [
-    "pH", "Turbidity", "TDS", "Dissolved Oxygen", "Nitrate", "BOD",
-    "COD", "Conductivity", "Coliform Indicator", "Temperature"
+    "pH","Turbidity","TDS","Dissolved Oxygen","Nitrate","BOD","COD",
+    "Conductivity","Coliform Indicator","Temperature"
 ]
-
 ALIASES = {
-    "pH": ["ph", "p_h"],
-    "Turbidity": ["turbidity", "turbidity_ntu", "ntu"],
-    "TDS": ["tds", "total_dissolved_solids", "total dissolved solids"],
-    "Dissolved Oxygen": ["dissolved_oxygen", "dissolved oxygen", "do", "oxygen"],
-    "Nitrate": ["nitrate", "nitrate_mg_l", "no3", "no3_n"],
-    "BOD": ["bod", "biochemical_oxygen_demand"],
-    "COD": ["cod", "chemical_oxygen_demand"],
-    "Conductivity": ["conductivity", "electrical_conductivity", "ec"],
-    "Coliform Indicator": ["coliform", "coliform_indicator", "total_coliform", "fecal_coliform"],
-    "Temperature": ["temperature", "temp", "water_temperature"],
+    "pH":["ph","p_h"],
+    "Turbidity":["turbidity","ntu","turbidity_ntu"],
+    "TDS":["tds","total_dissolved_solids","total dissolved solids"],
+    "Dissolved Oxygen":["dissolved_oxygen","dissolved oxygen","do","oxygen"],
+    "Nitrate":["nitrate","nitrate_mg_l","no3","no3_n"],
+    "BOD":["bod","biochemical_oxygen_demand"],
+    "COD":["cod","chemical_oxygen_demand"],
+    "Conductivity":["conductivity","electrical_conductivity","ec"],
+    "Coliform Indicator":["coliform","coliform_indicator","total_coliform","fecal_coliform"],
+    "Temperature":["temperature","temp","water_temperature"]
 }
-
-# Screening bands. These are deliberately exposed in the UI and are not a substitute
-# for a jurisdiction-specific drinking-water, recreational-water, or discharge standard.
-# Values are generic screening thresholds and can be edited in the app.
 DEFAULT_BANDS = {
-    "pH": {"Good": (6.5, 8.5), "Moderate": (6.0, 9.0), "Poor": (5.5, 9.5)},
-    "Turbidity": {"Good": (0, 1), "Moderate": (1, 5), "Poor": (5, 10)},
-    "TDS": {"Good": (0, 300), "Moderate": (300, 600), "Poor": (600, 1000)},
-    "Dissolved Oxygen": {"Good": (6, np.inf), "Moderate": (4, 6), "Poor": (2, 4)},
-    "Nitrate": {"Good": (0, 10), "Moderate": (10, 25), "Poor": (25, 50)},
-    "BOD": {"Good": (0, 3), "Moderate": (3, 6), "Poor": (6, 10)},
-    "COD": {"Good": (0, 20), "Moderate": (20, 50), "Poor": (50, 100)},
-    "Conductivity": {"Good": (0, 500), "Moderate": (500, 1000), "Poor": (1000, 2000)},
-    "Coliform Indicator": {"Good": (0, 1), "Moderate": (1, 10), "Poor": (10, 100)},
-    "Temperature": {"Good": (5, 25), "Moderate": (25, 30), "Poor": (30, 35)},
+    "pH":(6.5,8.5,6.0,9.0,5.5,9.5),
+    "Turbidity":(1,5,10),
+    "TDS":(300,600,1000),
+    "Dissolved Oxygen":(6,4,2),
+    "Nitrate":(10,25,50),
+    "BOD":(3,6,10),
+    "COD":(20,50,100),
+    "Conductivity":(500,1000,2000),
+    "Coliform Indicator":(1,10,100),
+    "Temperature":(25,30,35)
 }
+LOWER_BETTER = {"Turbidity","TDS","Nitrate","BOD","COD","Conductivity","Coliform Indicator"}
+HIGHER_BETTER = {"Dissolved Oxygen"}
 
-HIGHER_IS_BETTER = {"Dissolved Oxygen"}
-LOWER_IS_BETTER = {
-    "Turbidity", "TDS", "Nitrate", "BOD", "COD", "Conductivity",
-    "Coliform Indicator"
-}
+def norm(x):
+    return "".join(c for c in str(x).lower().strip() if c.isalnum())
 
-def normalize(s):
-    return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
-
-def find_column(df, parameter):
-    normalized = {normalize(c): c for c in df.columns}
-    candidates = [parameter] + ALIASES[parameter]
-    for c in candidates:
-        if normalize(c) in normalized:
-            return normalized[normalize(c)]
-    return None
-
-def standardize_columns(df):
-    out = df.copy()
-    rename = {}
+def standardize(df):
+    df=df.copy()
+    normalized={norm(c):c for c in df.columns}
+    rename={}
     for p in PARAMETERS:
-        c = find_column(out, p)
-        if c:
-            rename[c] = p
-    return out.rename(columns=rename)
+        for candidate in [p]+ALIASES[p]:
+            if norm(candidate) in normalized:
+                rename[normalized[norm(candidate)]]=p
+                break
+    return df.rename(columns=rename)
 
-def screen_one(parameter, value, bands):
-    if pd.isna(value):
-        return "Not available"
-    v = float(value)
-    b = bands[parameter]
-    if parameter in HIGHER_IS_BETTER:
-        if v >= b["Good"][0]: return "Good"
-        if v >= b["Moderate"][0]: return "Moderate"
-        if v >= b["Poor"][0]: return "Poor"
-        return "Very Poor"
-    if parameter == "pH":
-        if b["Good"][0] <= v <= b["Good"][1]: return "Good"
-        if b["Moderate"][0] <= v <= b["Moderate"][1]: return "Moderate"
-        if b["Poor"][0] <= v <= b["Poor"][1]: return "Poor"
-        return "Very Poor"
-    if parameter == "Temperature":
-        if b["Good"][0] <= v <= b["Good"][1]: return "Good"
-        if b["Moderate"][0] <= v <= b["Moderate"][1]: return "Moderate"
-        if b["Poor"][0] <= v <= b["Poor"][1]: return "Poor"
-        return "Very Poor"
-    # lower is better
-    if v <= b["Good"][1]: return "Good"
-    if v <= b["Moderate"][1]: return "Moderate"
-    if v <= b["Poor"][1]: return "Poor"
-    return "Very Poor"
-
-def score_one(parameter, value, bands):
-    label = screen_one(parameter, value, bands)
-    return {"Good": 4, "Moderate": 3, "Poor": 2, "Very Poor": 1}.get(label, np.nan)
-
-def classify_row(row, bands):
-    scores = [score_one(p, row[p], bands) for p in PARAMETERS if p in row and not pd.isna(row[p])]
-    scores = [x for x in scores if not pd.isna(x)]
-    if not scores:
-        return "Not available"
-    avg = np.mean(scores)
-    if avg >= 3.5: return "Good"
-    if avg >= 2.5: return "Moderate"
-    if avg >= 1.5: return "Poor"
-    return "Very Poor"
-
-def parameter_result_row(row, bands):
-    return {p: screen_one(p, row[p], bands) if p in row else "Not available" for p in PARAMETERS}
-
-def clean_numeric(df):
+def numeric(df):
     for p in PARAMETERS:
         if p in df:
-            df[p] = pd.to_numeric(df[p], errors="coerce")
+            df[p]=pd.to_numeric(df[p],errors="coerce")
+    for c in ["Latitude","Longitude","Year"]:
+        if c in df:
+            df[c]=pd.to_numeric(df[c],errors="coerce")
     return df
 
-def infer_target(df):
-    for c in ["Water-quality classifier", "Water Quality Class", "water_quality_class", "class", "label", "target"]:
-        if c in df.columns:
-            return c
+def cls(p,v,b):
+    if pd.isna(v): return "Not available"
+    v=float(v)
+    if p=="pH":
+        if b[0]<=v<=b[1]: return "Good"
+        if b[2]<=v<=b[3]: return "Moderate"
+        if b[4]<=v<=b[5]: return "Poor"
+        return "Very Poor"
+    if p=="Dissolved Oxygen":
+        if v>=b[0]: return "Good"
+        if v>=b[1]: return "Moderate"
+        if v>=b[2]: return "Poor"
+        return "Very Poor"
+    if p=="Temperature":
+        if 5<=v<=b[0]: return "Good"
+        if v<=b[1]: return "Moderate"
+        if v<=b[2]: return "Poor"
+        return "Very Poor"
+    if v<=b[0]: return "Good"
+    if v<=b[1]: return "Moderate"
+    if v<=b[2]: return "Poor"
+    return "Very Poor"
+
+def score(label):
+    return {"Good":4,"Moderate":3,"Poor":2,"Very Poor":1}.get(label,np.nan)
+
+def overall(row,bands):
+    s=[score(cls(p,row[p],bands[p])) for p in PARAMETERS if p in row and not pd.isna(row[p])]
+    s=[x for x in s if not pd.isna(x)]
+    if not s:return "Not available"
+    a=np.mean(s)
+    return "Good" if a>=3.5 else "Moderate" if a>=2.5 else "Poor" if a>=1.5 else "Very Poor"
+
+def detect_target(df):
+    for c in ["Water-quality classifier","Water Quality Class","water_quality_class","class","label","target"]:
+        if c in df:return c
     return None
 
-def train_model(df):
-    work = clean_numeric(df.copy())
-    target = infer_target(work)
-    if target is None:
-        return None, None, "No target column found."
-    X = work[PARAMETERS].copy()
-    y = work[target].astype(str)
-    valid = X.notna().sum(axis=1) >= 3
-    X, y = X.loc[valid], y.loc[valid]
-    if len(X) < 30 or y.nunique() < 2:
-        return None, None, "At least 30 usable rows and 2 classes are recommended for ML training."
-    X = X.fillna(X.median(numeric_only=True))
+def train(df):
+    target=detect_target(df)
+    if not target:return None,None,"No label column found."
+    x=df[PARAMETERS].copy()
+    y=df[target].astype(str)
+    valid=x.notna().sum(axis=1)>=3
+    x=x.loc[valid].copy(); y=y.loc[valid]
+    if len(x)<30 or y.nunique()<2:return None,None,"Need at least 30 usable labeled rows and 2 classes."
+    x=x.fillna(x.median(numeric_only=True))
     try:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
+        xt,xv,yt,yv=train_test_split(x,y,test_size=.2,random_state=42,stratify=y)
     except ValueError:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-    model = RandomForestClassifier(
-        n_estimators=350, random_state=42, class_weight="balanced", n_jobs=-1
-    )
-    model.fit(X_train, y_train)
-    pred = model.predict(X_test)
-    report = classification_report(y_test, pred, zero_division=0, output_dict=True)
-    return model, report, None
+        xt,xv,yt,yv=train_test_split(x,y,test_size=.2,random_state=42)
+    m=RandomForestClassifier(n_estimators=400,class_weight="balanced",random_state=42,n_jobs=-1)
+    m.fit(xt,yt); pred=m.predict(xv)
+    return m,classification_report(yv,pred,output_dict=True,zero_division=0),None
 
-def make_contribution(model, row):
-    if model is None:
-        return pd.DataFrame()
-    x = pd.DataFrame([{p: row.get(p, np.nan) for p in PARAMETERS}]).fillna(0)
-    # Tree impurity importance is global; permutation importance on the single row is unstable.
-    # We therefore present normalized model feature importance as "model contribution".
-    imp = pd.Series(model.feature_importances_, index=PARAMETERS)
-    imp = (imp / imp.sum() * 100).sort_values(ascending=False)
-    return imp.rename("Contribution %").reset_index(names="Parameter")
-
-st.title("💧 AquaClass")
-st.caption("Explainable Water Quality Classification & Global Water-Issue Explorer")
+st.title("💧 AquaClass Global 2.0")
+st.caption("Explainable water-quality screening, historical analysis and worldwide spatial exploration")
 
 with st.sidebar:
-    st.header("Analysis settings")
-    uploaded = st.file_uploader("Upload water-quality CSV", type=["csv"])
-    show_history = st.checkbox("Show historical global water issues", True)
+    st.header("Data")
+    files=st.file_uploader("Upload one or more CSV files",type=["csv"],accept_multiple_files=True)
+    source_mode=st.radio("Analysis mode",["Uploaded data","Demo data"])
     st.divider()
-    st.subheader("Screening bands")
-    st.caption("Edit these generic screening bands for your project. For real decisions, use the applicable local/regulatory standard.")
+    st.header("Filters")
+    country_filter=None
+    year_range=None
 
-# Load data
-if uploaded is not None:
-    try:
-        df = pd.read_csv(uploaded)
-        source_name = uploaded.name
-    except Exception as e:
-        st.error(f"Could not read CSV: {e}")
-        st.stop()
+if source_mode=="Demo data" and not files:
+    data=pd.DataFrame([
+        ["Pakistan","Faisalabad",31.45,73.14,2024,7.2,2.1,420,5.2,14,4.5,35,720,4,27],
+        ["India","Delhi",28.61,77.21,2023,7.8,8.2,680,3.1,32,7.1,88,1200,18,29],
+        ["Germany","Berlin",52.52,13.40,2022,7.4,1.0,290,8.2,5,1.5,15,450,1,18],
+        ["Brazil","Manaus",-3.12,-60.02,2021,6.9,4.5,350,6.1,11,3.8,29,620,5,26],
+        ["United States","Mississippi",32.35,-90.88,2020,7.0,3.2,510,5.7,18,4.9,42,800,7,24],
+    ],columns=["Country","Location","Latitude","Longitude","Year"]+PARAMETERS)
+    source="Demo records"
+elif files:
+    frames=[]
+    for f in files:
+        try:
+            x=pd.read_csv(f); x["__source_file"]=f.name; frames.append(x)
+        except Exception as e: st.error(f"{f.name}: {e}")
+    data=pd.concat(frames,ignore_index=True) if frames else pd.DataFrame()
+    source=f"{len(files)} uploaded file(s)"
 else:
-    df = pd.DataFrame([{
-        "Location": "Demo sample",
-        "Country": "Pakistan",
-        "Latitude": 30.3753,
-        "Longitude": 69.3451,
-        "pH": 7.2, "Turbidity": 2.2, "TDS": 420,
-        "Dissolved Oxygen": 5.2, "Nitrate": 14, "BOD": 4.5,
-        "COD": 35, "Conductivity": 720, "Coliform Indicator": 4,
-        "Temperature": 27
-    }])
-    source_name = "Built-in demonstration record"
+    data=pd.DataFrame(); source="No data"
 
-df = standardize_columns(df)
-df = clean_numeric(df)
-
-# Session-persistent bands
-if "bands" not in st.session_state:
-    st.session_state.bands = DEFAULT_BANDS.copy()
-bands = st.session_state.bands
-
-with st.expander("Customize screening bands", expanded=False):
-    cols = st.columns(2)
-    for i, p in enumerate(PARAMETERS):
-        with cols[i % 2]:
-            b = bands[p]
-            if p == "pH":
-                lo = st.number_input(f"{p} Good min", value=float(b["Good"][0]), key=f"{p}_glo")
-                hi = st.number_input(f"{p} Good max", value=float(b["Good"][1]), key=f"{p}_ghi")
-                bands[p]["Good"] = (lo, hi)
-            else:
-                hi = st.number_input(f"{p} Good upper", value=float(b["Good"][1]), key=f"{p}_ghi")
-                bands[p]["Good"] = (b["Good"][0], hi)
-                if p in HIGHER_IS_BETTER:
-                    mid = st.number_input(f"{p} Moderate lower", value=float(b["Moderate"][0]), key=f"{p}_mlo")
-                    poor = st.number_input(f"{p} Poor lower", value=float(b["Poor"][0]), key=f"{p}_plo")
-                    bands[p]["Moderate"] = (mid, b["Moderate"][1])
-                    bands[p]["Poor"] = (poor, b["Poor"][1])
-                else:
-                    mid = st.number_input(f"{p} Moderate upper", value=float(b["Moderate"][1]), key=f"{p}_mhi")
-                    poor = st.number_input(f"{p} Poor upper", value=float(b["Poor"][1]), key=f"{p}_phi")
-                    bands[p]["Moderate"] = (b["Moderate"][0], mid)
-                    bands[p]["Poor"] = (b["Poor"][0], poor)
-
-# Determine usable parameter columns
-available = [p for p in PARAMETERS if p in df.columns]
-missing = [p for p in PARAMETERS if p not in df.columns]
-
-if missing:
-    st.warning("Missing parameters: " + ", ".join(missing) + ". Uploading aliases such as `ph`, `do`, `ec`, `ntu` is supported.")
-
-if available:
-    df["Water-quality classifier"] = df.apply(lambda r: classify_row(r, bands), axis=1)
-    result_cols = [c for c in ["Location", "Country", "Date", "Latitude", "Longitude"] if c in df.columns] + PARAMETERS + ["Water-quality classifier"]
-else:
-    st.error("No recognized water-quality parameter columns were found.")
-    st.info("Expected parameters: " + ", ".join(PARAMETERS))
+if data.empty:
+    st.info("Upload one or more CSV files to begin.")
     st.stop()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Classification", "🔎 Explainability", "🌍 Global Map", "📚 Historical Issues", "🤖 ML Model"
+data=standardize(data); data=numeric(data)
+missing=[p for p in PARAMETERS if p not in data.columns]
+if missing:
+    st.warning("Missing columns: "+", ".join(missing))
+
+# Configurable screening bands
+bands={}
+with st.sidebar.expander("Screening thresholds",expanded=False):
+    st.caption("Generic screening defaults. Replace with a documented standard for your intended use.")
+    for p in PARAMETERS:
+        b=DEFAULT_BANDS[p]
+        if p=="pH":
+            bands[p]=(st.number_input(f"{p} good min",value=float(b[0]),key="ph1"),
+                      st.number_input(f"{p} good max",value=float(b[1]),key="ph2"),
+                      st.number_input(f"{p} moderate min",value=float(b[2]),key="ph3"),
+                      st.number_input(f"{p} moderate max",value=float(b[3]),key="ph4"),
+                      st.number_input(f"{p} poor min",value=float(b[4]),key="ph5"),
+                      st.number_input(f"{p} poor max",value=float(b[5]),key="ph6"))
+        elif p=="Dissolved Oxygen":
+            bands[p]=(st.number_input(f"{p} good ≥",value=float(b[0]),key=p+"1"),
+                      st.number_input(f"{p} moderate ≥",value=float(b[1]),key=p+"2"),
+                      st.number_input(f"{p} poor ≥",value=float(b[2]),key=p+"3"))
+        else:
+            bands[p]=(st.number_input(f"{p} good upper",value=float(b[0]),key=p+"1"),
+                      st.number_input(f"{p} moderate upper",value=float(b[1]),key=p+"2"),
+                      st.number_input(f"{p} poor upper",value=float(b[2]),key=p+"3"))
+
+for p in PARAMETERS:
+    if p not in data: continue
+    data[p]=pd.to_numeric(data[p],errors="coerce")
+data["Water-quality classifier"]=data.apply(lambda r: overall(r,bands),axis=1)
+
+# filters
+if "Country" in data:
+    countries=["All"]+sorted(data["Country"].dropna().astype(str).unique().tolist())
+    chosen=st.sidebar.selectbox("Country",countries)
+    if chosen!="All": data=data[data["Country"].astype(str)==chosen]
+if "Year" in data and data["Year"].notna().any():
+    mn=int(data["Year"].min()); mx=int(data["Year"].max())
+    if mn<mx:
+        yr=st.sidebar.slider("Year range",mn,mx,(mn,mx))
+        data=data[data["Year"].between(*yr)]
+
+tab1,tab2,tab3,tab4,tab5,tab6=st.tabs([
+    "Dashboard","Record explanation","World map","Time series","Historical issues","ML"
 ])
 
 with tab1:
-    st.subheader("Water-quality classification")
-    st.write(f"Data source: **{source_name}** · {len(df):,} records")
-    counts = df["Water-quality classifier"].value_counts()
-    c1, c2, c3, c4 = st.columns(4)
-    for col, label in zip([c1,c2,c3,c4], ["Good","Moderate","Poor","Very Poor"]):
-        col.metric(label, int(counts.get(label, 0)))
-    st.dataframe(df[result_cols], use_container_width=True, hide_index=True)
-    export = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Download analyzed CSV", export, "aquaclass_analyzed.csv", "text/csv")
+    st.subheader("Classification results")
+    counts=data["Water-quality classifier"].value_counts()
+    cs=st.columns(4)
+    for c,l in zip(cs,["Good","Moderate","Poor","Very Poor"]):
+        c.metric(l,int(counts.get(l,0)))
+    cols=[c for c in ["Country","Location","Latitude","Longitude","Year"]+PARAMETERS+["Water-quality classifier"] if c in data]
+    st.dataframe(data[cols],use_container_width=True,hide_index=True)
+    st.download_button("Download analyzed CSV",data.to_csv(index=False).encode(),"aquaclass_analyzed.csv","text/csv")
 
 with tab2:
-    st.subheader("Parameter contribution")
-    idx = st.number_input("Select record number", min_value=0, max_value=max(0, len(df)-1), value=0, step=1)
-    row = df.iloc[int(idx)]
-    st.markdown(f"### Final result: **{row['Water-quality classifier']}**")
-    result = pd.DataFrame({
-        "Parameter": PARAMETERS,
-        "Value": [row.get(p, np.nan) for p in PARAMETERS],
-        "Class": [screen_one(p, row.get(p, np.nan), bands) if p in row else "Not available" for p in PARAMETERS],
-        "Score": [score_one(p, row.get(p, np.nan), bands) if p in row else np.nan for p in PARAMETERS]
-    })
-    st.dataframe(result, use_container_width=True, hide_index=True)
-    st.bar_chart(result.dropna(subset=["Score"]).set_index("Parameter")["Score"])
-    st.caption("Score is a transparent screening score (1–4). It is not a regulatory water-quality index.")
+    st.subheader("Explain one observation")
+    i=st.number_input("Record",0,max(0,len(data)-1),0)
+    row=data.iloc[int(i)]
+    st.markdown(f"## Final result: **{row['Water-quality classifier']}**")
+    exp=[]
+    for p in PARAMETERS:
+        if p in row:
+            label=cls(p,row[p],bands[p])
+            exp.append([p,row[p],label,score(label)])
+    e=pd.DataFrame(exp,columns=["Parameter","Value","Class","Score"])
+    st.dataframe(e,use_container_width=True,hide_index=True)
+    fig=px.bar(e.dropna(subset=["Score"]).sort_values("Score"),x="Score",y="Parameter",color="Class",orientation="h",
+               title="Parameter screening contribution (transparent 1–4 score)")
+    st.plotly_chart(fig,use_container_width=True)
+    st.caption("The screening score indicates how each parameter falls within the configured bands. It is not a universal regulatory index.")
 
 with tab3:
-    st.subheader("World map of uploaded observations")
-    if {"Latitude", "Longitude"}.issubset(df.columns):
-        map_df = df.dropna(subset=["Latitude", "Longitude"]).copy()
-        if len(map_df):
-            fig = px.scatter_geo(
-                map_df, lat="Latitude", lon="Longitude",
-                color="Water-quality classifier",
-                hover_name="Location" if "Location" in map_df else None,
-                hover_data=[c for c in ["Country"] + PARAMETERS if c in map_df.columns],
-                projection="natural earth",
-                title="Observed water-quality classifications"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No valid latitude/longitude records found.")
-    else:
-        st.info("Add `Latitude` and `Longitude` columns to your CSV for global observation mapping.")
-
-    if show_history and HISTORY_FILE.exists():
-        hist = pd.read_csv(HISTORY_FILE)
-        fig2 = px.scatter_geo(
-            hist, lat="Latitude", lon="Longitude", color="Severity",
-            hover_name="Event", hover_data=["Country", "Year", "Issue Type"],
-            projection="natural earth", title="Selected historical water-related issues"
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("Worldwide water-quality observations")
+    if {"Latitude","Longitude"}.issubset(data.columns):
+        m=data.dropna(subset=["Latitude","Longitude"]).copy()
+        if len(m):
+            fig=px.scatter_geo(m,lat="Latitude",lon="Longitude",color="Water-quality classifier",
+                               hover_name="Location" if "Location" in m else None,
+                               hover_data=[c for c in ["Country","Year"]+PARAMETERS if c in m],
+                               projection="natural earth",title="Uploaded observations")
+            st.plotly_chart(fig,use_container_width=True)
+        else: st.info("No valid coordinates.")
+    else: st.info("Latitude and Longitude are required for mapping.")
 
 with tab4:
-    st.subheader("Historical global water issues")
-    if HISTORY_FILE.exists():
-        hist = pd.read_csv(HISTORY_FILE)
-        st.dataframe(hist, use_container_width=True, hide_index=True)
-        st.caption("The bundled file is a starter dataset for demonstration. Expand it with documented events from authoritative public datasets before making research claims.")
-        st.download_button("⬇️ Download historical issue dataset", hist.to_csv(index=False).encode(), "historical_water_issues.csv", "text/csv")
-    else:
-        st.warning("Historical dataset not found.")
+    st.subheader("Historical / temporal analysis")
+    if "Year" in data.columns and data["Year"].notna().any():
+        ts=data.groupby(["Year","Water-quality classifier"]).size().reset_index(name="Records")
+        fig=px.line(ts,x="Year",y="Records",color="Water-quality classifier",markers=True)
+        st.plotly_chart(fig,use_container_width=True)
+        if "Country" in data:
+            country_year=data.groupby(["Year","Country"]).size().reset_index(name="Records")
+            fig2=px.density_heatmap(country_year,x="Year",y="Country",z="Records",title="Observation coverage by country and year")
+            st.plotly_chart(fig2,use_container_width=True)
+    else: st.info("Add a Year column to analyze trends.")
 
 with tab5:
-    st.subheader("Optional supervised ML classifier")
-    st.write("If your uploaded CSV contains a labeled target column such as `Water-quality classifier`, AquaClass can train a Random Forest and report validation metrics.")
-    if uploaded is None:
-        st.info("Upload a labeled CSV to train a model.")
+    st.subheader("Global historical water-issue reference")
+    hist=Path(__file__).parent/"historical_water_issues.csv"
+    if hist.exists():
+        h=pd.read_csv(hist)
+        st.dataframe(h,use_container_width=True,hide_index=True)
+        fig=px.scatter_geo(h,lat="Latitude",lon="Longitude",color="Issue Type",
+                           hover_name="Event",hover_data=["Country","Year","Severity"],
+                           projection="natural earth",title="Reference locations of documented water-related issues")
+        st.plotly_chart(fig,use_container_width=True)
+        st.caption("This reference layer is illustrative. Use authoritative event databases and cite the source for research/publication use.")
+    else: st.warning("Historical reference file is missing.")
+
+with tab6:
+    st.subheader("Optional supervised ML model")
+    if not files:
+        st.info("Upload a labeled CSV containing a target such as `Water-quality classifier`.")
     else:
-        model, report, err = train_model(df)
-        if err:
-            st.warning(err)
+        model,report,err=train(data)
+        if err: st.warning(err)
         else:
-            st.success("Model trained successfully.")
-            accuracy = report.get("accuracy", np.nan)
-            st.metric("Validation accuracy", f"{accuracy:.1%}" if not pd.isna(accuracy) else "n/a")
-            st.dataframe(pd.DataFrame(report).T, use_container_width=True)
-            # global feature importance
-            imp = pd.Series(model.feature_importances_, index=PARAMETERS).sort_values(ascending=True)
-            st.subheader("Global model parameter contribution")
-            st.bar_chart(imp)
+            st.success("Random Forest trained.")
+            st.metric("Validation accuracy",f"{report['accuracy']:.1%}")
+            st.dataframe(pd.DataFrame(report).T,use_container_width=True)
+            imp=pd.Series(model.feature_importances_,index=PARAMETERS).sort_values()
+            fig=px.bar(imp,x=imp.values,y=imp.index,orientation="h",labels={"x":"Importance","y":"Parameter"},
+                       title="Global model feature importance")
+            st.plotly_chart(fig,use_container_width=True)
 
 st.divider()
-st.caption("AquaClass is a screening and educational decision-support application. Classifications depend on the thresholds and/or training data supplied. Do not use it as a substitute for accredited laboratory testing, regulatory compliance, or public-health decisions.")
+st.caption("AquaClass is decision-support software. It does not replace accredited laboratory testing, regulatory standards, or public-health assessment.")
